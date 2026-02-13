@@ -1,98 +1,81 @@
 const puppeteer = require("puppeteer");
-const fetch = require("node-fetch");
 
-const WEBHOOK =
-  "https://script.google.com/macros/s/AKfycbwhnN-OQ0WSzV5d1Coc24oX2lgIY9zda0LKRUU5Ni1s9eg5H2bEJa_AJ3n00Z9M6RycCA/exec";
+const SHEET_WEBHOOK = "https://script.google.com/macros/s/AKfycbwvlVNO8H17XPfzWOSyP3iQ4PQDEy1GJFUIKRMO11Ca_tpU1xBsxVwsv900QO23hHGCiw/exec";
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+async function clickByText(page, text) {
+  await page.evaluate((t) => {
+    const el = [...document.querySelectorAll("button,td,a")]
+      .find(e => e.innerText.trim() === t);
+    if (el) el.click();
+  }, text);
+}
 
 (async () => {
+
   const browser = await puppeteer.launch({
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    protocolTimeout: 0
   });
 
   const page = await browser.newPage();
+  page.setDefaultTimeout(0);
 
   await page.goto(
     "https://unifiedfamilysurvey.ap.gov.in/#/home/publicreports",
-    { waitUntil: "networkidle2" }
+    { waitUntil: "domcontentloaded", timeout: 0 }
   );
 
-  await page.waitForTimeout(3000);
+  // wait Angular fully load
+  await sleep(12000);
 
-  let allRows = [];
+  // click district
+  await clickByText(page, "ANANTHAPURAMU");
+  await sleep(6000);
 
-  // DISTRICT BUTTONS
-  const districts = await page.$$eval(
-    "button",
-    btns =>
-      btns
-        .map(b => b.innerText.trim())
-        .filter(t => t && t === t.toUpperCase())
+  // click mandal
+  await clickByText(page, "ANANTAPUR-U");
+
+  // wait secretariat table
+  await page.waitForFunction(() =>
+    [...document.querySelectorAll("th")]
+      .some(th => th.innerText.includes("SECRETARIAT NAME")),
+    { timeout: 0 }
   );
 
-  for (const dist of districts) {
-    console.log("DISTRICT:", dist);
+  await sleep(3000);
 
-    const [distBtn] = await page.$x(`//button[contains(., "${dist}")]`);
-    if (!distBtn) continue;
+  // extract table
+  const data = await page.evaluate(() => {
+    const table = document.querySelector("table");
+    if (!table) return [];
 
-    await distBtn.click();
-    await page.waitForTimeout(2500);
+    const headers = [...table.querySelectorAll("thead th")]
+      .map(th => th.innerText.trim());
 
-    // MANDALS
-    const mandals = await page.$$eval(
-      "a",
-      els => els.map(e => e.innerText.trim()).filter(t => t)
-    );
+    const rows = [];
 
-    for (const mandal of mandals) {
-      console.log("MANDAL:", mandal);
+    table.querySelectorAll("tbody tr").forEach(tr => {
+      const obj = {};
+      const cells = tr.querySelectorAll("td");
+      headers.forEach((h, i) => obj[h] = cells[i]?.innerText.trim());
+      rows.push(obj);
+    });
 
-      const [mandalBtn] = await page.$x(`//a[contains(., "${mandal}")]`);
-      if (!mandalBtn) continue;
+    return rows;
+  });
 
-      await mandalBtn.click();
-      await page.waitForTimeout(2000);
-
-      const rows = await page.$$eval("table tbody tr", trs =>
-        trs.map(tr =>
-          Array.from(tr.querySelectorAll("td")).map(td =>
-            td.innerText.trim()
-          )
-        )
-      );
-
-      rows.forEach(r => {
-        allRows.push([
-          dist,
-          mandal,
-          r[1],
-          r[3],
-          r[4],
-          r[5],
-          r[6],
-          r[7],
-          r[8],
-          r[9],
-          r[10]
-        ]);
-      });
-
-      await page.goBack({ waitUntil: "networkidle2" });
-      await page.waitForTimeout(1500);
-    }
-
-    await page.goBack({ waitUntil: "networkidle2" });
-    await page.waitForTimeout(1500);
-  }
-
-  console.log("TOTAL ROWS:", allRows.length);
-
-  await fetch(WEBHOOK, {
+  // send to sheet
+  await fetch(SHEET_WEBHOOK, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ rows: allRows }),
+    body: JSON.stringify(data)
   });
 
   await browser.close();
+
 })();
