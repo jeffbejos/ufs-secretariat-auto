@@ -3,7 +3,7 @@ name: UFS Secretariat Auto
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 * * * *"   # every 1 hour
+    - cron: "0 */6 * * *"   # 6 hours once (slow scrape safe)
 
 jobs:
   run:
