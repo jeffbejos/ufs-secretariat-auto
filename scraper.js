@@ -6,8 +6,8 @@ const WEBHOOK =
 
 (async () => {
   const browser = await puppeteer.launch({
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
     headless: true,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
 
   const page = await browser.newPage();
@@ -17,83 +17,80 @@ const WEBHOOK =
     { waitUntil: "networkidle2" }
   );
 
-  await page.waitForSelector("button");
-
-  // ALL DISTRICTS
-  const districts = await page.$$eval(
-    "button",
-    (btns) =>
-      btns
-        .map((b) => b.innerText.trim())
-        .filter((t) => t.length > 3 && t === t.toUpperCase())
-  );
+  await page.waitForTimeout(3000);
 
   let allRows = [];
 
+  // DISTRICT BUTTONS
+  const districts = await page.$$eval(
+    "button",
+    btns =>
+      btns
+        .map(b => b.innerText.trim())
+        .filter(t => t && t === t.toUpperCase())
+  );
+
   for (const dist of districts) {
-    console.log("DIST:", dist);
+    console.log("DISTRICT:", dist);
 
-    const distBtn = await page.$x(`//button[contains(., '${dist}')]`);
-    if (!distBtn.length) continue;
+    const [distBtn] = await page.$x(`//button[contains(., "${dist}")]`);
+    if (!distBtn) continue;
 
-    await distBtn[0].click();
-    await page.waitForTimeout(2000);
+    await distBtn.click();
+    await page.waitForTimeout(2500);
 
-    // mandals
+    // MANDALS
     const mandals = await page.$$eval(
       "a",
-      (els) => els.map((e) => e.innerText.trim()).filter((t) => t)
+      els => els.map(e => e.innerText.trim()).filter(t => t)
     );
 
     for (const mandal of mandals) {
       console.log("MANDAL:", mandal);
 
-      const mandalBtn = await page.$x(`//a[contains(., '${mandal}')]`);
-      if (!mandalBtn.length) continue;
+      const [mandalBtn] = await page.$x(`//a[contains(., "${mandal}")]`);
+      if (!mandalBtn) continue;
 
-      await mandalBtn[0].click();
-      await page.waitForTimeout(1500);
+      await mandalBtn.click();
+      await page.waitForTimeout(2000);
 
-      const rows = await page.$$eval("table tbody tr", (trs) =>
-        trs.map((tr) =>
-          Array.from(tr.querySelectorAll("td")).map((td) =>
+      const rows = await page.$$eval("table tbody tr", trs =>
+        trs.map(tr =>
+          Array.from(tr.querySelectorAll("td")).map(td =>
             td.innerText.trim()
           )
         )
       );
 
-      rows.forEach((r) => {
-        allRows.push({
-          district: dist,
-          mandal: mandal,
-          secretariat: r[1],
-          total_emp: r[3],
-          emp_started: r[4],
-          emp_not_started: r[5],
-          emp_today: r[6],
-          households: r[7],
-          completed: r[8],
-          pending: r[9],
-          status: r[10],
-        });
+      rows.forEach(r => {
+        allRows.push([
+          dist,
+          mandal,
+          r[1],
+          r[3],
+          r[4],
+          r[5],
+          r[6],
+          r[7],
+          r[8],
+          r[9],
+          r[10]
+        ]);
       });
 
       await page.goBack({ waitUntil: "networkidle2" });
-      await page.waitForTimeout(1000);
+      await page.waitForTimeout(1500);
     }
 
     await page.goBack({ waitUntil: "networkidle2" });
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(1500);
   }
 
-  console.log("TOTAL:", allRows.length);
+  console.log("TOTAL ROWS:", allRows.length);
 
-  // SEND TO SHEET
   await fetch(WEBHOOK, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ rows: allRows }),
   });
 
