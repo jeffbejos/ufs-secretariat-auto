@@ -2,51 +2,54 @@ const puppeteer = require("puppeteer");
 
 const SHEET_WEBHOOK = "https://script.google.com/macros/s/AKfycby4hnwEKq0iHNmkXTyEX9C_222apivShyg69sEE2Sv-Ueer_L2hN_-ERuY7npM0ockOZg/exec";
 
-// manual sleep
 function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise(r => setTimeout(r, ms));
+}
+
+async function clickByText(page, text) {
+  await page.evaluate((t) => {
+    const el = [...document.querySelectorAll("button,td,a")]
+      .find(e => e.innerText.trim() === t);
+    if (el) el.click();
+  }, text);
 }
 
 (async () => {
 
   const browser = await puppeteer.launch({
     headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    protocolTimeout: 0
   });
 
   const page = await browser.newPage();
+  page.setDefaultTimeout(0);
 
   await page.goto(
     "https://unifiedfamilysurvey.ap.gov.in/#/home/publicreports",
     { waitUntil: "domcontentloaded", timeout: 0 }
   );
 
-  // wait Angular load
-  await sleep(8000);
+  // wait Angular fully load
+  await sleep(12000);
 
-  // DISTRICT CLICK
-  await page.evaluate(() => {
-    const btn = [...document.querySelectorAll("button")]
-      .find(b => b.innerText.includes("ANANTHAPURAMU"));
-    if (btn) btn.click();
-  });
+  // click district
+  await clickByText(page, "ANANTHAPURAMU");
+  await sleep(6000);
 
-  await sleep(5000);
-
-  // MANDAL CLICK
-  await page.evaluate(() => {
-    const btn = [...document.querySelectorAll("button")]
-      .find(b => b.innerText.includes("ANANTAPUR-U"));
-    if (btn) btn.click();
-  });
+  // click mandal
+  await clickByText(page, "ANANTAPUR-U");
 
   // wait secretariat table
   await page.waitForFunction(() =>
-    [...document.querySelectorAll("table thead th")]
+    [...document.querySelectorAll("th")]
       .some(th => th.innerText.includes("SECRETARIAT NAME")),
     { timeout: 0 }
   );
 
+  await sleep(3000);
+
+  // extract table
   const data = await page.evaluate(() => {
     const table = document.querySelector("table");
     if (!table) return [];
@@ -66,6 +69,7 @@ function sleep(ms) {
     return rows;
   });
 
+  // send to sheet
   await fetch(SHEET_WEBHOOK, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
