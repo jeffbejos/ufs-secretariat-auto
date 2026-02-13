@@ -2,21 +2,27 @@ const puppeteer = require("puppeteer");
 
 const SHEET_WEBHOOK = "https://script.google.com/macros/s/AKfycby4hnwEKq0iHNmkXTyEX9C_222apivShyg69sEE2Sv-Ueer_L2hN_-ERuY7npM0ockOZg/exec";
 
+// manual sleep
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 (async () => {
+
   const browser = await puppeteer.launch({
-    headless: "new",
+    headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox"]
   });
 
   const page = await browser.newPage();
 
-  await page.goto("https://unifiedfamilysurvey.ap.gov.in/#/home/publicreports", {
-    waitUntil: "domcontentloaded",
-    timeout: 0
-  });
+  await page.goto(
+    "https://unifiedfamilysurvey.ap.gov.in/#/home/publicreports",
+    { waitUntil: "domcontentloaded", timeout: 0 }
+  );
 
-  // extra wait for Angular load
-  await page.waitForTimeout(8000);
+  // wait Angular load
+  await sleep(8000);
 
   // DISTRICT CLICK
   await page.evaluate(() => {
@@ -25,7 +31,7 @@ const SHEET_WEBHOOK = "https://script.google.com/macros/s/AKfycby4hnwEKq0iHNmkXT
     if (btn) btn.click();
   });
 
-  await page.waitForTimeout(5000);
+  await sleep(5000);
 
   // MANDAL CLICK
   await page.evaluate(() => {
@@ -49,10 +55,11 @@ const SHEET_WEBHOOK = "https://script.google.com/macros/s/AKfycby4hnwEKq0iHNmkXT
       .map(th => th.innerText.trim());
 
     const rows = [];
+
     table.querySelectorAll("tbody tr").forEach(tr => {
       const obj = {};
       const cells = tr.querySelectorAll("td");
-      headers.forEach((h,i) => obj[h] = cells[i]?.innerText.trim());
+      headers.forEach((h, i) => obj[h] = cells[i]?.innerText.trim());
       rows.push(obj);
     });
 
@@ -66,4 +73,5 @@ const SHEET_WEBHOOK = "https://script.google.com/macros/s/AKfycby4hnwEKq0iHNmkXT
   });
 
   await browser.close();
+
 })();
