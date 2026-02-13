@@ -1,22 +1,17 @@
 const puppeteer = require("puppeteer");
 
-const SHEET_WEBHOOK =
-  "https://script.google.com/macros/s/AKfycbwvlVNO8H17XPfzWOSyP3iQ4PQDEy1GJFUIKRMO11Ca_tpU1xBsxVwsv900QO23hHGCiw/exec";
+const SHEET_WEBHOOK = "https://script.google.com/macros/s/AKfycbwvlVNO8H17XPfzWOSyP3iQ4PQDEy1GJFUIKRMO11Ca_tpU1xBsxVwsv900QO23hHGCiw/exec";
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
 async function clickByText(page, text) {
-  await page.evaluate(t => {
+  await page.evaluate((t) => {
     const el = [...document.querySelectorAll("button,td,a")]
       .find(e => e.innerText.trim() === t);
     if (el) el.click();
   }, text);
-}
-
-function formatDate(d) {
-  return d.toLocaleDateString("en-GB").replace(/\//g, "-");
 }
 
 (async () => {
@@ -35,91 +30,50 @@ function formatDate(d) {
     { waitUntil: "domcontentloaded", timeout: 0 }
   );
 
+  // wait Angular fully load
   await sleep(12000);
 
-  // district mandal
+  // click district
   await clickByText(page, "ANANTHAPURAMU");
   await sleep(6000);
+
+  // click mandal
   await clickByText(page, "ANANTAPUR-U");
 
-  // dates
-  const today = new Date();
-  const yesterday = new Date();
-  yesterday.setDate(today.getDate() - 1);
-
-  const todayStr = formatDate(today);
-  const yestStr = formatDate(yesterday);
-
-  async function setDate(toDate) {
-    await page.evaluate(t => {
-      const inputs = document.querySelectorAll("input");
-      inputs[1].value = t; // To date
-    }, toDate);
-
-    await clickByText(page, "Submit");
-    await sleep(6000);
-  }
-
-  // ---------- TODAY TABLE ----------
-  await setDate(todayStr);
-
+  // wait secretariat table
   await page.waitForFunction(() =>
     [...document.querySelectorAll("th")]
-      .some(th => th.innerText.includes("SECRETARIAT NAME"))
+      .some(th => th.innerText.includes("SECRETARIAT NAME")),
+    { timeout: 0 }
   );
 
   await sleep(3000);
 
-  const todayTable = await page.evaluate(() => {
-    const headers = [...document.querySelectorAll("thead th")]
+  // extract table
+  const data = await page.evaluate(() => {
+    const table = document.querySelector("table");
+    if (!table) return [];
+
+    const headers = [...table.querySelectorAll("thead th")]
       .map(th => th.innerText.trim());
 
     const rows = [];
 
-    document.querySelectorAll("tbody tr").forEach(tr => {
+    table.querySelectorAll("tbody tr").forEach(tr => {
       const obj = {};
-      const tds = tr.querySelectorAll("td");
-
-      headers.forEach((h, i) => {
-        obj[h] = tds[i]?.innerText.trim();
-      });
-
+      const cells = tr.querySelectorAll("td");
+      headers.forEach((h, i) => obj[h] = cells[i]?.innerText.trim());
       rows.push(obj);
     });
 
     return rows;
   });
 
-  // ---------- YESTERDAY COMPLETED MAP ----------
-  await setDate(yestStr);
-  await sleep(3000);
-
-  const yestMap = await page.evaluate(() => {
-    const map = {};
-
-    document.querySelectorAll("tbody tr").forEach(tr => {
-      const tds = tr.querySelectorAll("td");
-      const name = tds[1]?.innerText.trim();
-      const completed = tds[8]?.innerText.trim(); // completed column
-
-      map[name] = completed;
-    });
-
-    return map;
-  });
-
-  // ---------- MERGE ----------
-  const final = todayTable.map(row => ({
-    ...row,
-    "YESTERDAY HOUSEHOLDS SURVEY COMPLETED":
-      yestMap[row["SECRETARIAT NAME"]] || "0"
-  }));
-
   // send to sheet
   await fetch(SHEET_WEBHOOK, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(final)
+    body: JSON.stringify(data)
   });
 
   await browser.close();
