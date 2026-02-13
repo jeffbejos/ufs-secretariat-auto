@@ -1,68 +1,13 @@
-const SHEET_WEBHOOK = "https://script.google.com/macros/s/AKfycbwoj4e7I8M8ziT6znNznqTGWy7LINvNh_RJt_B7Eoktk9Bf1SuAZZjbfLrPh-xQdxCPRA/exec";
+const SHEET_WEBHOOK = "https://script.google.com/macros/s/AKfycbwhnN-OQ0WSzV5d1Coc24oX2lgIY9zda0LKRUU5Ni1s9eg5H2bEJa_AJ3n00Z9M6RycCA/exec";
 
-// ====== CONFIG ======
-const FROM_DATE = "14-12-2025";
-const DISTRICT_ID = 502;   // ANANTHAPURAM
-const MANDAL_ID = 1001;    // ANANTAPUR-U
-
-// today date auto
-function getToday() {
-  const d = new Date();
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yyyy = d.getFullYear();
-  return `${dd}-${mm}-${yyyy}`;
-}
-
-// ====== API CALL ======
-async function fetchSecretariatData() {
-
-  const payload = {
-    _Clients3a2: JSON.stringify({
-      type: "1018",        // SECRETARIAT REPORT
-      param1: FROM_DATE,
-      param2: getToday(),
-      param3: DISTRICT_ID,
-      param4: MANDAL_ID,
-      browser: "Chrome",
-      source: "web"
-    })
-  };
-
-  const res = await fetch(
-    "https://unifiedfamilysurvey.ap.gov.in/clusterWEB/api/fsV4/op_reports",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }
-  );
-
-  const json = await res.json();
-  return json;
-}
-
-// ====== SEND TO GOOGLE SHEET ======
-async function sendToSheet(data) {
+(async () => {
 
   await fetch(SHEET_WEBHOOK, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data)
+    body: JSON.stringify({ test: "hello from github" })
   });
 
-}
-
-// ====== RUN ======
-(async () => {
-
-  try {
-    const data = await fetchSecretariatData();
-    await sendToSheet(data);
-    console.log("✅ Sheet Updated");
-
-  } catch (err) {
-    console.error("❌ Error:", err);
-  }
+  console.log("sent");
 
 })();
