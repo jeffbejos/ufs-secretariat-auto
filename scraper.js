@@ -1,4 +1,4 @@
-const SHEET_WEBHOOK = "https://script.google.com/macros/s/AKfycby4hnwEKq0iHNmkXTyEX9C_222apivShyg69sEE2Sv-Ueer_L2hN_-ERuY7npM0ockOZg/exec";
+const SHEET_WEBHOOK = "https://script.google.com/macros/s/AKfycbwoj4e7I8M8ziT6znNznqTGWy7LINvNh_RJt_B7Eoktk9Bf1SuAZZjbfLrPh-xQdxCPRA/exec";
 
 // ====== CONFIG ======
 const FROM_DATE = "14-12-2025";
