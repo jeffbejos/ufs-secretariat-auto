@@ -1,9 +1,9 @@
 name: UFS Secretariat Auto
 
 on:
-  schedule:
-    - cron: "0 * * * *"
   workflow_dispatch:
+  schedule:
+    - cron: "*/30 * * * *"   # every 30 min
 
 jobs:
   run:
@@ -15,7 +15,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-
-      - run: npm install
 
       - run: node scraper.js
