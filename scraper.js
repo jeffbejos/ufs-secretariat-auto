@@ -1,80 +1,127 @@
 const puppeteer = require("puppeteer");
 
-const SHEET_WEBHOOK = "https://script.google.com/macros/s/AKfycbxaUDFfMnvnSpFyb1khDsB70fgdp0wDxOjWDrE7uJygit1UKKh9da-9Jqz6G2qM6r8R-w/exec";
+const WEBHOOK = "https://script.google.com/macros/s/AKfycbxaUDFfMnvnSpFyb1khDsB70fgdp0wDxOjWDrE7uJygit1UKKh9da-9Jqz6G2qM6r8R-w/exec";
 
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+function formatDate(d){
+  return String(d.getDate()).padStart(2,"0")+"-"+
+         String(d.getMonth()+1).padStart(2,"0")+"-"+
+         d.getFullYear();
 }
 
-async function clickByText(page, text) {
-  await page.evaluate((t) => {
-    const el = [...document.querySelectorAll("button,td,a")]
-      .find(e => e.innerText.trim() === t);
-    if (el) el.click();
-  }, text);
+async function clickText(page,text){
+  await page.evaluate(t=>{
+    const el=[...document.querySelectorAll("td,a,button,span")]
+      .find(e=>e.innerText.trim()===t);
+    if(el) el.click();
+  },text);
 }
 
-(async () => {
+async function setToDateAndSubmit(page,dateStr){
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
-    protocolTimeout: 0
+  await page.evaluate((d)=>{
+
+    const input=[...document.querySelectorAll("input")]
+      .find(i=>i.placeholder?.toLowerCase().includes("to"));
+
+    if(!input) return;
+
+    input.focus();
+    input.value="";
+    for(const c of d){
+      input.value+=c;
+      input.dispatchEvent(new Event("input",{bubbles:true}));
+    }
+    input.dispatchEvent(new Event("change",{bubbles:true}));
+
+    // SUBMIT BUTTON
+    const btn=[...document.querySelectorAll("button")]
+      .find(b=>b.innerText.toLowerCase().includes("submit"));
+
+    if(btn) btn.click();
+
+  },dateStr);
+
+  // wait table reload
+  await page.waitForFunction(()=>{
+    return [...document.querySelectorAll("tbody tr")].length>0;
   });
 
-  const page = await browser.newPage();
-  page.setDefaultTimeout(0);
+  await sleep(2000);
+}
 
-  await page.goto(
-    "https://unifiedfamilysurvey.ap.gov.in/#/home/publicreports",
-    { waitUntil: "domcontentloaded", timeout: 0 }
-  );
+async function scrapeTable(page){
+  return await page.evaluate(()=>{
+    const table=document.querySelector("table");
+    if(!table) return [];
 
-  // wait Angular fully load
-  await sleep(12000);
+    const headers=[...table.querySelectorAll("thead th")]
+      .map(th=>th.innerText.trim());
 
-  // click district
-  await clickByText(page, "ANANTHAPURAMU");
-  await sleep(6000);
-
-  // click mandal
-  await clickByText(page, "ANANTAPUR-U");
-
-  // wait secretariat table
-  await page.waitForFunction(() =>
-    [...document.querySelectorAll("th")]
-      .some(th => th.innerText.includes("SECRETARIAT NAME")),
-    { timeout: 0 }
-  );
-
-  await sleep(3000);
-
-  // extract table
-  const data = await page.evaluate(() => {
-    const table = document.querySelector("table");
-    if (!table) return [];
-
-    const headers = [...table.querySelectorAll("thead th")]
-      .map(th => th.innerText.trim());
-
-    const rows = [];
-
-    table.querySelectorAll("tbody tr").forEach(tr => {
-      const obj = {};
-      const cells = tr.querySelectorAll("td");
-      headers.forEach((h, i) => obj[h] = cells[i]?.innerText.trim());
+    const rows=[];
+    table.querySelectorAll("tbody tr").forEach(tr=>{
+      const obj={};
+      const tds=tr.querySelectorAll("td");
+      headers.forEach((h,i)=>obj[h]=tds[i]?.innerText.trim());
       rows.push(obj);
     });
 
     return rows;
   });
+}
 
-  // send to sheet
-  await fetch(SHEET_WEBHOOK, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data)
+async function send(sheet,data){
+  await fetch(WEBHOOK,{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({sheet,data})
   });
+}
+
+(async()=>{
+
+  const browser=await puppeteer.launch({
+    headless:true,
+    args:["--no-sandbox","--disable-setuid-sandbox"]
+  });
+
+  const page=await browser.newPage();
+
+  await page.goto(
+    "https://unifiedfamilysurvey.ap.gov.in/#/home/publicreports",
+    {waitUntil:"domcontentloaded"}
+  );
+
+  await sleep(12000);
+
+  // district
+  await clickText(page,"ANANTHAPURAMU");
+  await sleep(6000);
+
+  // mandal
+  await clickText(page,"ANANTAPUR-U");
+
+  await page.waitForFunction(()=>{
+    return [...document.querySelectorAll("tbody tr")].length>0;
+  });
+
+  await sleep(2000);
+
+  // ===== TODAY =====
+  const today=formatDate(new Date());
+  await setToDateAndSubmit(page,today);
+  const todayData=await scrapeTable(page);
+  await send("RawData",todayData);
+
+  // ===== YESTERDAY =====
+  const y=new Date();
+  y.setDate(y.getDate()-1);
+  const yDate=formatDate(y);
+
+  await setToDateAndSubmit(page,yDate);
+  const yData=await scrapeTable(page);
+  await send("Yesterday Data",yData);
 
   await browser.close();
 
