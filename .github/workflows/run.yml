@@ -1,21 +1,54 @@
-name: UFS Auto Report
+name: Daily UFS Scraper
 
 on:
   schedule:
-    - cron: "0 * * * *"
-  workflow_dispatch:
+    - cron: '30 4 * * *'  # Daily at 10:00 AM IST (4:30 UTC)
+  workflow_dispatch:  # Manual trigger
 
 jobs:
-  run:
+  scrape:
     runs-on: ubuntu-latest
-
+    
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          node-version: 20
-
-      - run: npm install
-
-      - run: node scraper.js
+          node-version: '20'
+          
+      - name: Install dependencies
+        run: |
+          npm install puppeteer-core @puppeteer/browsers
+          
+      - name: Install Chrome for Puppeteer
+        run: |
+          npx @puppeteer/browsers install chrome@stable
+          
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgbm1 \
+            libxkbcommon0 \
+            libxss1 \
+            libgtk-3-0 \
+            libasound2 \
+            libnss3 \
+            xvfb
+          
+      - name: Run scraper
+        run: |
+          xvfb-run -a node scraper.js
+        env:
+          # GitHub Secrets lo store cheyyali
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          
+      - name: Upload debug screenshots (if any)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: ./*.png
+          retention-days: 7
