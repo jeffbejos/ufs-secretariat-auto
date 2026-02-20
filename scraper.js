@@ -1,15 +1,10 @@
+// scraper.js - CommonJS version (no import/await at top level)
 const puppeteer = require('puppeteer-core');
 const { execSync } = require('child_process');
 const fs = require('fs');
 
-// For node-fetch v3 (ES module)
-let fetch;
-try {
-  fetch = (await import('node-fetch')).default;
-} catch (e) {
-  console.log('node-fetch import failed, using global fetch');
-  fetch = global.fetch;
-}
+// fetch for Node.js (CommonJS)
+const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 
 const WEBHOOK = process.env.WEBHOOK_URL || "https://script.google.com/macros/s/AKfycbxaUDFfMnvnSpFyb1khDsB70fgdp0wDxOjWDrE7uJygit1UKKh9da-9Jqz6G2qM6r8R-w/exec";
 
@@ -96,10 +91,14 @@ async function setDatesAndSubmit(page, fromDate, toDate) {
   
   // Wait for table to update
   await sleep(10000);
-  await page.waitForFunction(() => {
-    const rows = document.querySelectorAll('tbody tr');
-    return rows.length > 5;
-  }, { timeout: 30000 }).catch(() => console.log('Wait timeout, continuing...'));
+  try {
+    await page.waitForFunction(() => {
+      const rows = document.querySelectorAll('tbody tr');
+      return rows.length > 5;
+    }, { timeout: 30000 });
+  } catch (e) {
+    console.log('Wait timeout, continuing...');
+  }
 }
 
 async function scrapeTableData(page) {
@@ -111,7 +110,7 @@ async function scrapeTableData(page) {
       const cells = row.querySelectorAll('td');
       if (cells.length >= 11) {
         data.push({
-          serial_no: cells[0]?.innerText.trim() || (idx + 1).toString(),
+          sl_no: cells[0]?.innerText.trim() || (idx + 1).toString(),
           secretariat: cells[1]?.innerText.trim() || '',
           total_secretariats: cells[2]?.innerText.trim() || '0',
           total_employees: cells[3]?.innerText.trim() || '0',
@@ -156,6 +155,8 @@ async function sendToSheet(sheetName, data, date) {
 }
 
 async function scrapeData() {
+  console.log('Starting scraper...');
+  
   const chromePath = findChromePath();
   console.log('Chrome path:', chromePath);
   
@@ -197,10 +198,12 @@ async function scrapeData() {
     console.log('Initial screenshot taken');
     
     // Wait for table to load
-    await page.waitForSelector('tbody tr', { timeout: 30000 }).catch(() => {
+    try {
+      await page.waitForSelector('tbody tr', { timeout: 30000 });
+    } catch (e) {
       console.log('Table not found, waiting longer...');
-      return sleep(10000);
-    });
+      await sleep(10000);
+    }
     
     await sleep(5000);
     
@@ -223,7 +226,7 @@ async function scrapeData() {
     // Click mandal
     console.log('Clicking mandal: ANANTAPUR-U');
     await page.evaluate(() => {
-      const elements = [...document.querySelectorAll('h4, .report-box, td, a')];
+      const elements = [...document.querySelectorAll('h4, .report-box, td, a, button')];
       for (let el of elements) {
         if (el.innerText && el.innerText.includes('ANANTAPUR-U')) {
           el.click();
@@ -236,11 +239,15 @@ async function scrapeData() {
     await sleep(8000);
     await page.screenshot({ path: '03-after-mandal.png', fullPage: true });
     
-    // Wait for table
-    await page.waitForFunction(() => {
-      const rows = document.querySelectorAll('tbody tr');
-      return rows.length > 10;
-    }, { timeout: 30000 });
+    // Wait for table to populate
+    try {
+      await page.waitForFunction(() => {
+        const rows = document.querySelectorAll('tbody tr');
+        return rows.length > 10;
+      }, { timeout: 30000 });
+    } catch (e) {
+      console.log('Table population timeout, but continuing...');
+    }
     
     // Get dates
     const today = new Date();
