@@ -2,9 +2,7 @@ const puppeteer = require("puppeteer");
 
 const SHEET_WEBHOOK = "https://script.google.com/macros/s/AKfycbwvlVNO8H17XPfzWOSyP3iQ4PQDEy1GJFUIKRMO11Ca_tpU1xBsxVwsv900QO23hHGCiw/exec";
 
-function sleep(ms){
-  return new Promise(r=>setTimeout(r,ms));
-}
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
 function getYesterdaySiteFormat(){
   const d=new Date();
@@ -12,7 +10,7 @@ function getYesterdaySiteFormat(){
   const mm=String(d.getMonth()+1).padStart(2,"0");
   const dd=String(d.getDate()).padStart(2,"0");
   const yyyy=d.getFullYear();
-  return `${mm}/${dd}/${yyyy}`; // site format MM/DD/YYYY
+  return `${mm}/${dd}/${yyyy}`;
 }
 
 async function clickByText(page,text){
@@ -21,6 +19,25 @@ async function clickByText(page,text){
       .find(e=>e.innerText.trim()===t);
     if(el) el.click();
   },text);
+}
+
+async function scrapeTable(page){
+  return await page.evaluate(()=>{
+    const table=document.querySelector("table");
+    if(!table) return [];
+
+    const headers=[...table.querySelectorAll("thead th")]
+      .map(th=>th.innerText.trim());
+
+    const rows=[];
+    table.querySelectorAll("tbody tr").forEach(tr=>{
+      const obj={};
+      const cells=tr.querySelectorAll("td");
+      headers.forEach((h,i)=>obj[h]=cells[i]?.innerText.trim());
+      rows.push(obj);
+    });
+    return rows;
+  });
 }
 
 (async()=>{
@@ -41,23 +58,6 @@ async function clickByText(page,text){
 
   await sleep(12000);
 
-  // ─── SET TO DATE = YESTERDAY ─────────────
-  const yDate=getYesterdaySiteFormat();
-
-  await page.evaluate((dateVal)=>{
-    const inputs=[...document.querySelectorAll("input")];
-    const toInput=inputs.find(i=>i.value && i.value.includes("/"));
-    if(toInput){
-      toInput.value=dateVal;
-      toInput.dispatchEvent(new Event("input",{bubbles:true}));
-      toInput.dispatchEvent(new Event("change",{bubbles:true}));
-    }
-  },yDate);
-
-  // click submit
-  await clickByText(page,"Submit");
-  await sleep(6000);
-
   // select district + mandal
   await clickByText(page,"ANANTHAPURAMU");
   await sleep(6000);
@@ -70,29 +70,57 @@ async function clickByText(page,text){
 
   await sleep(3000);
 
-  // extract table
-  const data=await page.evaluate(()=>{
-    const table=document.querySelector("table");
-    if(!table) return [];
+  // ───── TODAY DATA ─────
+  const todayData = await scrapeTable(page);
 
-    const headers=[...table.querySelectorAll("thead th")]
-      .map(th=>th.innerText.trim());
+  // ───── SET TO DATE = YESTERDAY ─────
+  const yDate = getYesterdaySiteFormat();
 
-    const rows=[];
-    table.querySelectorAll("tbody tr").forEach(tr=>{
-      const obj={};
-      const cells=tr.querySelectorAll("td");
-      headers.forEach((h,i)=>obj[h]=cells[i]?.innerText.trim());
-      rows.push(obj);
-    });
+  await page.evaluate((dateVal)=>{
+    const inputs=[...document.querySelectorAll("input")];
+    const toInput=inputs.find(i=>i.value && i.value.includes("/"));
+    if(toInput){
+      toInput.value=dateVal;
+      toInput.dispatchEvent(new Event("input",{bubbles:true}));
+      toInput.dispatchEvent(new Event("change",{bubbles:true}));
+    }
+  },yDate);
 
-    return rows;
+  await clickByText(page,"Submit");
+  await sleep(6000);
+
+  await clickByText(page,"ANANTHAPURAMU");
+  await sleep(4000);
+  await clickByText(page,"ANANTAPUR-U");
+
+  await sleep(4000);
+
+  // ───── YESTERDAY DATA ─────
+  const yRows = await scrapeTable(page);
+
+  // map yesterday: name -> completed
+  const yMap = {};
+  yRows.forEach(r=>{
+    const name=r["SECRETARIAT NAME"]?.trim();
+    const val=r["HOUSEHOLDS SURVEY COMPLETED"];
+    if(name) yMap[name]=val;
   });
 
+  // ───── MERGE ─────
+  const finalData = todayData.map(r=>{
+    const name=r["SECRETARIAT NAME"]?.trim();
+    return {
+      ...r,
+      "SECRETARIAT NAME (Yesterday)": name,
+      "Completed upto Yesterday": yMap[name] ?? "N/A"
+    };
+  });
+
+  // send
   await fetch(SHEET_WEBHOOK,{
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify(data)
+    body:JSON.stringify(finalData)
   });
 
   await browser.close();
