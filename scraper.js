@@ -1,6 +1,33 @@
-const puppeteer = require("puppeteer");
+const puppeteer = require('puppeteer-core');
+const { execSync } = require('child_process');
+const fs = require('fs');
 
-const WEBHOOK = "https://script.google.com/macros/s/AKfycbxaUDFfMnvnSpFyb1khDsB70fgdp0wDxOjWDrE7uJygit1UKKh9da-9Jqz6G2qM6r8R-w/exec";
+// Chrome path automatically find cheyadam
+function findChromePath() {
+  try {
+    const paths = [
+      '/usr/bin/google-chrome',
+      '/usr/bin/chromium-browser',
+      '/usr/bin/chromium',
+      execSync('which chromium').toString().trim(),
+      execSync('which google-chrome').toString().trim(),
+      execSync('npx @puppeteer/browsers chrome-path').toString().trim()
+    ];
+    
+    for (const path of paths) {
+      if (fs.existsSync(path)) {
+        return path;
+      }
+    }
+  } catch (e) {
+    console.log('Chrome path detection error:', e.message);
+  }
+  
+  // Fallback to default chrome path
+  return '/usr/bin/google-chrome';
+}
+
+const WEBHOOK = process.env.WEBHOOK_URL || "https://script.google.com/macros/s/AKfycbxaUDFfMnvnSpFyb1khDsB70fgdp0wDxOjWDrE7uJygit1UKKh9da-9Jqz6G2qM6r8R-w/exec";
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -20,92 +47,91 @@ function formatDateForDisplay(d) {
 
 async function setDatesAndSubmit(page, fromDate, toDate) {
   await page.evaluate((fromStr, toStr) => {
-    // From date input
-    const fromInputs = [...document.querySelectorAll('input[type="date"]')];
-    if (fromInputs.length >= 2) {
-      // First is From date
-      fromInputs[0].focus();
-      fromInputs[0].value = fromStr;
-      fromInputs[0].dispatchEvent(new Event('input', { bubbles: true }));
-      fromInputs[0].dispatchEvent(new Event('change', { bubbles: true }));
-
-      // Second is To date
-      fromInputs[1].focus();
-      fromInputs[1].value = toStr;
-      fromInputs[1].dispatchEvent(new Event('input', { bubbles: true }));
-      fromInputs[1].dispatchEvent(new Event('change', { bubbles: true }));
+    const inputs = [...document.querySelectorAll('input[type="date"]')];
+    if (inputs.length >= 2) {
+      // From date
+      inputs[0].value = fromStr;
+      inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+      inputs[0].dispatchEvent(new Event('change', { bubbles: true }));
+      
+      // To date
+      inputs[1].value = toStr;
+      inputs[1].dispatchEvent(new Event('input', { bubbles: true }));
+      inputs[1].dispatchEvent(new Event('change', { bubbles: true }));
     }
-
-    // Submit button
+    
     setTimeout(() => {
-      const submitBtn = [...document.querySelectorAll('button')].find(b =>
+      const submitBtn = [...document.querySelectorAll('button')].find(b => 
         b.innerText.toLowerCase().includes('submit')
       );
       if (submitBtn) submitBtn.click();
     }, 500);
   }, fromDate, toDate);
-
-  // Wait for table to update
-  await sleep(8000);
-  await page.waitForFunction(() => {
-    const rows = document.querySelectorAll('tbody tr');
-    return rows.length > 10; // At least some data loaded
-  }, { timeout: 30000 });
-  await sleep(3000);
+  
+  await sleep(10000);
 }
 
 async function scrapeTableData(page) {
   return await page.evaluate(() => {
     const rows = document.querySelectorAll('tbody tr');
-    const result = [];
-
-    rows.forEach((row, index) => {
+    const data = [];
+    
+    rows.forEach((row, idx) => {
       const cells = row.querySelectorAll('td');
       if (cells.length >= 11) {
-        result.push({
-          sno: cells[0]?.innerText.trim() || (index + 1).toString(),
-          secretariat: cells[1]?.innerText.trim() || '',
-          totalSecretariats: cells[2]?.innerText.trim() || '0',
-          totalEmployees: cells[3]?.innerText.trim() || '0',
-          employeesStarted: cells[4]?.innerText.trim() || '0',
-          employeesNotStarted: cells[5]?.innerText.trim() || '0',
-          employeesStartedToday: cells[6]?.innerText.trim() || '0',
-          totalHouseholds: cells[7]?.innerText.trim() || '0',
-          householdsCompleted: cells[8]?.innerText.trim() || '0',
-          householdsPending: cells[9]?.innerText.trim() || '0',
-          status: cells[10]?.innerText.trim() || ''
+        data.push({
+          sl_no: cells[0]?.innerText.trim() || (idx + 1).toString(),
+          secretariat_name: cells[1]?.innerText.trim() || '',
+          total_secretariats: cells[2]?.innerText.trim() || '0',
+          total_employees: cells[3]?.innerText.trim() || '0',
+          employees_started: cells[4]?.innerText.trim() || '0',
+          employees_not_started: cells[5]?.innerText.trim() || '0',
+          employees_started_today: cells[6]?.innerText.trim() || '0',
+          total_households: cells[7]?.innerText.trim() || '0',
+          households_completed: cells[8]?.innerText.trim() || '0',
+          households_pending: cells[9]?.innerText.trim() || '0',
+          survey_status: cells[10]?.innerText.trim() || ''
         });
       }
     });
-    return result;
+    
+    return data;
   });
 }
 
-async function sendToSheet(sheetName, data, dateLabel) {
+async function sendToSheet(sheetName, data, date) {
   try {
+    const fetch = (await import('node-fetch')).default;
+    
     const response = await fetch(WEBHOOK, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         sheet: sheetName,
         data: data,
-        date: dateLabel,
-        timestamp: new Date().toISOString()
+        report_date: date,
+        scraped_at: new Date().toISOString(),
+        record_count: data.length
       })
     });
-    console.log(`✅ Sent ${sheetName} - ${data.length} records`);
+    
+    console.log(`✅ ${sheetName}: ${data.length} records sent for ${date}`);
   } catch (e) {
     console.error(`❌ Error sending ${sheetName}:`, e.message);
   }
 }
 
 async function scrapeDistrictMandalData(page, district, mandal) {
-  console.log(`📍 Scraping: ${district} - ${mandal}`);
-
+  console.log(`🎯 Scraping: ${district} - ${mandal}`);
+  
   try {
-    // Wait for district elements
-    await page.waitForSelector('tbody tr td[style*="cursor: pointer"]', { timeout: 30000 });
-
+    // Take initial screenshot
+    await page.screenshot({ path: 'initial-load.png', fullPage: true });
+    
+    // Wait for table
+    await page.waitForSelector('tbody tr', { timeout: 30000 });
+    await sleep(5000);
+    
     // Click district
     await page.evaluate((d) => {
       const cells = [...document.querySelectorAll('tbody tr td:nth-child(2)')];
@@ -116,93 +142,112 @@ async function scrapeDistrictMandalData(page, district, mandal) {
         }
       }
     }, district);
-    console.log(`  ✅ Clicked district: ${district}`);
-    await sleep(5000);
-
+    console.log('✅ District clicked');
+    await sleep(7000);
+    
     // Click mandal
-    await page.waitForFunction(() => {
-      return document.body.innerText.includes('ANANTAPUR-U') ||
-        document.querySelectorAll('.report-box').length > 0;
-    }, { timeout: 30000 });
-
     await page.evaluate((m) => {
-      const mandalEls = [...document.querySelectorAll('h4, .report-box, td')];
-      for (let el of mandalEls) {
+      const els = [...document.querySelectorAll('h4, .report-box, td')];
+      for (let el of els) {
         if (el.innerText.includes(m)) {
           el.click();
           return;
         }
       }
     }, mandal);
-    console.log(`  ✅ Clicked mandal: ${mandal}`);
+    console.log('✅ Mandal clicked');
     await sleep(8000);
-
-    // Wait for table
+    
+    // Wait for table to populate
     await page.waitForFunction(() => {
       const rows = document.querySelectorAll('tbody tr');
-      return rows.length > 5;
+      return rows.length > 10;
     }, { timeout: 30000 });
-    await sleep(2000);
-
-    // Get today's date
+    
+    // Get dates
     const today = new Date();
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-
-    const todayFormatted = formatDateForInput(today);
-    const todayDisplay = formatDateForDisplay(today);
-    const yesterdayFormatted = formatDateForInput(yesterday);
-    const yesterdayDisplay = formatDateForDisplay(yesterday);
-
-    // Scrape today's data
-    console.log(`  📅 Fetching data for: ${todayDisplay}`);
-    await setDatesAndSubmit(page, todayFormatted, todayFormatted);
+    
+    // Today's data
+    console.log('📊 Fetching today\'s data...');
+    await setDatesAndSubmit(page, 
+      formatDateForInput(today), 
+      formatDateForInput(today)
+    );
     const todayData = await scrapeTableData(page);
-    await sendToSheet('RawData', todayData, todayDisplay);
-
-    // Scrape yesterday's data
-    console.log(`  📅 Fetching data for: ${yesterdayDisplay}`);
-    await setDatesAndSubmit(page, yesterdayFormatted, yesterdayFormatted);
+    await sendToSheet('RawData', todayData, formatDateForDisplay(today));
+    
+    // Take screenshot of today's data
+    await page.screenshot({ path: 'today-data.png', fullPage: true });
+    
+    // Yesterday's data
+    console.log('📊 Fetching yesterday\'s data...');
+    await setDatesAndSubmit(page, 
+      formatDateForInput(yesterday), 
+      formatDateForInput(yesterday)
+    );
     const yesterdayData = await scrapeTableData(page);
-    await sendToSheet('Yesterday Data', yesterdayData, yesterdayDisplay);
-
-    return { todayData, yesterdayData };
+    await sendToSheet('Yesterday Data', yesterdayData, formatDateForDisplay(yesterday));
+    
+    // Summary
+    await page.screenshot({ path: 'final-state.png', fullPage: true });
+    
+    return { today: todayData.length, yesterday: yesterdayData.length };
+    
   } catch (e) {
-    console.error(`❌ Error in ${district} - ${mandal}:`, e.message);
+    console.error('❌ Error in scraping:', e);
+    await page.screenshot({ path: `error-${Date.now()}.png`, fullPage: true });
     throw e;
   }
 }
 
 (async () => {
+  console.log('🚀 Starting scraper...');
+  
+  const chromePath = findChromePath();
+  console.log('Chrome path:', chromePath);
+  
+  if (!fs.existsSync(chromePath)) {
+    throw new Error(`Chrome not found at ${chromePath}`);
+  }
+  
   const browser = await puppeteer.launch({
-    headless: false, // Keep false first time to see what's happening
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    defaultViewport: { width: 1366, height: 768 }
+    executablePath: chromePath,
+    headless: 'new',
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--disable-gpu',
+      '--window-size=1920,1080'
+    ]
   });
-
+  
   try {
     const page = await browser.newPage();
-
+    await page.setViewport({ width: 1920, height: 1080 });
+    await page.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    
     console.log('🌐 Navigating to reports page...');
     await page.goto('https://unifiedfamilysurvey.ap.gov.in/#/home/publicreports', {
       waitUntil: 'networkidle2',
       timeout: 60000
     });
-
-    console.log('⏳ Waiting for page to stabilize...');
+    
+    console.log('⏳ Waiting for page to load...');
     await sleep(15000);
-
-    // Take screenshot to see what's loaded
-    await page.screenshot({ path: 'debug-load.png', fullPage: true });
-    console.log('📸 Debug screenshot saved: debug-load.png');
-
+    
     // Scrape data
-    await scrapeDistrictMandalData(page, 'ANANTHAPURAMU', 'ANANTAPUR-U');
-
-    console.log('✅ Scraping completed successfully!');
-
+    const counts = await scrapeDistrictMandalData(page, 'ANANTHAPURAMU', 'ANANTAPUR-U');
+    
+    console.log('✅ Scraping completed!');
+    console.log(`📈 Today: ${counts.today} records, Yesterday: ${counts.yesterday} records`);
+    
   } catch (error) {
     console.error('❌ Fatal error:', error);
+    process.exit(1);
   } finally {
     await browser.close();
   }
