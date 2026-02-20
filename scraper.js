@@ -1,6 +1,6 @@
 const puppeteer = require("puppeteer");
 
-const SHEET_WEBHOOK = "https://script.google.com/macros/s/AKfycbwvlVNO8H17XPfzWOSyP3iQ4PQDEy1GJFUIKRMO11Ca_tpU1xBsxVwsv900QO23hHGCiw/exec";
+const SHEET_WEBHOOK = "https://script.google.com/macros/s/AKfycbxaUDFfMnvnSpFyb1khDsB70fgdp0wDxOjWDrE7uJygit1UKKh9da-9Jqz6G2qM6r8R-w/exec";
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
@@ -30,17 +30,13 @@ async function clickByText(page, text) {
     { waitUntil: "domcontentloaded", timeout: 0 }
   );
 
-  // wait Angular fully load
   await sleep(12000);
 
-  // click district
   await clickByText(page, "ANANTHAPURAMU");
   await sleep(6000);
 
-  // click mandal
   await clickByText(page, "ANANTAPUR-U");
 
-  // wait secretariat table
   await page.waitForFunction(() =>
     [...document.querySelectorAll("th")]
       .some(th => th.innerText.includes("SECRETARIAT NAME")),
@@ -49,7 +45,6 @@ async function clickByText(page, text) {
 
   await sleep(3000);
 
-  // extract table
   const data = await page.evaluate(() => {
     const table = document.querySelector("table");
     if (!table) return [];
@@ -69,7 +64,6 @@ async function clickByText(page, text) {
     return rows;
   });
 
-  // send to sheet
   await fetch(SHEET_WEBHOOK, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
