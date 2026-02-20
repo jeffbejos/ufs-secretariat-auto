@@ -2,29 +2,13 @@ const puppeteer = require('puppeteer-core');
 const { execSync } = require('child_process');
 const fs = require('fs');
 
-// Chrome path automatically find cheyadam
-function findChromePath() {
-  try {
-    const paths = [
-      '/usr/bin/google-chrome',
-      '/usr/bin/chromium-browser',
-      '/usr/bin/chromium',
-      execSync('which chromium').toString().trim(),
-      execSync('which google-chrome').toString().trim(),
-      execSync('npx @puppeteer/browsers chrome-path').toString().trim()
-    ];
-    
-    for (const path of paths) {
-      if (fs.existsSync(path)) {
-        return path;
-      }
-    }
-  } catch (e) {
-    console.log('Chrome path detection error:', e.message);
-  }
-  
-  // Fallback to default chrome path
-  return '/usr/bin/google-chrome';
+// For node-fetch v3 (ES module)
+let fetch;
+try {
+  fetch = (await import('node-fetch')).default;
+} catch (e) {
+  console.log('node-fetch import failed, using global fetch');
+  fetch = global.fetch;
 }
 
 const WEBHOOK = process.env.WEBHOOK_URL || "https://script.google.com/macros/s/AKfycbxaUDFfMnvnSpFyb1khDsB70fgdp0wDxOjWDrE7uJygit1UKKh9da-9Jqz6G2qM6r8R-w/exec";
@@ -45,7 +29,43 @@ function formatDateForDisplay(d) {
     d.getFullYear();
 }
 
+function findChromePath() {
+  // First check environment variable
+  if (process.env.CHROME_PATH && fs.existsSync(process.env.CHROME_PATH)) {
+    return process.env.CHROME_PATH;
+  }
+  
+  // Common paths in Ubuntu
+  const paths = [
+    '/usr/bin/chromium-browser',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/snap/bin/chromium'
+  ];
+  
+  for (const path of paths) {
+    if (fs.existsSync(path)) {
+      return path;
+    }
+  }
+  
+  // Try which command
+  try {
+    const whichPath = execSync('which chromium-browser || which google-chrome || which chromium').toString().trim();
+    if (whichPath && fs.existsSync(whichPath)) {
+      return whichPath;
+    }
+  } catch (e) {
+    console.log('which command failed:', e.message);
+  }
+  
+  // Fallback
+  return '/usr/bin/chromium-browser';
+}
+
 async function setDatesAndSubmit(page, fromDate, toDate) {
+  console.log(`Setting dates: From=${fromDate}, To=${toDate}`);
+  
   await page.evaluate((fromStr, toStr) => {
     const inputs = [...document.querySelectorAll('input[type="date"]')];
     if (inputs.length >= 2) {
@@ -60,15 +80,26 @@ async function setDatesAndSubmit(page, fromDate, toDate) {
       inputs[1].dispatchEvent(new Event('change', { bubbles: true }));
     }
     
+    // Click submit after a small delay
     setTimeout(() => {
       const submitBtn = [...document.querySelectorAll('button')].find(b => 
         b.innerText.toLowerCase().includes('submit')
       );
-      if (submitBtn) submitBtn.click();
+      if (submitBtn) {
+        console.log('Submit button clicked');
+        submitBtn.click();
+      } else {
+        console.log('Submit button not found');
+      }
     }, 500);
   }, fromDate, toDate);
   
+  // Wait for table to update
   await sleep(10000);
+  await page.waitForFunction(() => {
+    const rows = document.querySelectorAll('tbody tr');
+    return rows.length > 5;
+  }, { timeout: 30000 }).catch(() => console.log('Wait timeout, continuing...'));
 }
 
 async function scrapeTableData(page) {
@@ -80,8 +111,8 @@ async function scrapeTableData(page) {
       const cells = row.querySelectorAll('td');
       if (cells.length >= 11) {
         data.push({
-          sl_no: cells[0]?.innerText.trim() || (idx + 1).toString(),
-          secretariat_name: cells[1]?.innerText.trim() || '',
+          serial_no: cells[0]?.innerText.trim() || (idx + 1).toString(),
+          secretariat: cells[1]?.innerText.trim() || '',
           total_secretariats: cells[2]?.innerText.trim() || '0',
           total_employees: cells[3]?.innerText.trim() || '0',
           employees_started: cells[4]?.innerText.trim() || '0',
@@ -90,7 +121,7 @@ async function scrapeTableData(page) {
           total_households: cells[7]?.innerText.trim() || '0',
           households_completed: cells[8]?.innerText.trim() || '0',
           households_pending: cells[9]?.innerText.trim() || '0',
-          survey_status: cells[10]?.innerText.trim() || ''
+          status: cells[10]?.innerText.trim() || ''
         });
       }
     });
@@ -101,110 +132,30 @@ async function scrapeTableData(page) {
 
 async function sendToSheet(sheetName, data, date) {
   try {
-    const fetch = (await import('node-fetch')).default;
+    const payload = {
+      sheet: sheetName,
+      data: data,
+      report_date: date,
+      scraped_at: new Date().toISOString(),
+      record_count: data.length
+    };
+    
+    console.log(`Sending ${data.length} records to ${sheetName}...`);
     
     const response = await fetch(WEBHOOK, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sheet: sheetName,
-        data: data,
-        report_date: date,
-        scraped_at: new Date().toISOString(),
-        record_count: data.length
-      })
+      body: JSON.stringify(payload)
     });
     
-    console.log(`✅ ${sheetName}: ${data.length} records sent for ${date}`);
+    const result = await response.text();
+    console.log(`✅ ${sheetName} sent: ${result.substring(0, 100)}`);
   } catch (e) {
     console.error(`❌ Error sending ${sheetName}:`, e.message);
   }
 }
 
-async function scrapeDistrictMandalData(page, district, mandal) {
-  console.log(`🎯 Scraping: ${district} - ${mandal}`);
-  
-  try {
-    // Take initial screenshot
-    await page.screenshot({ path: 'initial-load.png', fullPage: true });
-    
-    // Wait for table
-    await page.waitForSelector('tbody tr', { timeout: 30000 });
-    await sleep(5000);
-    
-    // Click district
-    await page.evaluate((d) => {
-      const cells = [...document.querySelectorAll('tbody tr td:nth-child(2)')];
-      for (let cell of cells) {
-        if (cell.innerText.includes(d)) {
-          cell.click();
-          return;
-        }
-      }
-    }, district);
-    console.log('✅ District clicked');
-    await sleep(7000);
-    
-    // Click mandal
-    await page.evaluate((m) => {
-      const els = [...document.querySelectorAll('h4, .report-box, td')];
-      for (let el of els) {
-        if (el.innerText.includes(m)) {
-          el.click();
-          return;
-        }
-      }
-    }, mandal);
-    console.log('✅ Mandal clicked');
-    await sleep(8000);
-    
-    // Wait for table to populate
-    await page.waitForFunction(() => {
-      const rows = document.querySelectorAll('tbody tr');
-      return rows.length > 10;
-    }, { timeout: 30000 });
-    
-    // Get dates
-    const today = new Date();
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    
-    // Today's data
-    console.log('📊 Fetching today\'s data...');
-    await setDatesAndSubmit(page, 
-      formatDateForInput(today), 
-      formatDateForInput(today)
-    );
-    const todayData = await scrapeTableData(page);
-    await sendToSheet('RawData', todayData, formatDateForDisplay(today));
-    
-    // Take screenshot of today's data
-    await page.screenshot({ path: 'today-data.png', fullPage: true });
-    
-    // Yesterday's data
-    console.log('📊 Fetching yesterday\'s data...');
-    await setDatesAndSubmit(page, 
-      formatDateForInput(yesterday), 
-      formatDateForInput(yesterday)
-    );
-    const yesterdayData = await scrapeTableData(page);
-    await sendToSheet('Yesterday Data', yesterdayData, formatDateForDisplay(yesterday));
-    
-    // Summary
-    await page.screenshot({ path: 'final-state.png', fullPage: true });
-    
-    return { today: todayData.length, yesterday: yesterdayData.length };
-    
-  } catch (e) {
-    console.error('❌ Error in scraping:', e);
-    await page.screenshot({ path: `error-${Date.now()}.png`, fullPage: true });
-    throw e;
-  }
-}
-
-(async () => {
-  console.log('🚀 Starting scraper...');
-  
+async function scrapeData() {
   const chromePath = findChromePath();
   console.log('Chrome path:', chromePath);
   
@@ -221,7 +172,10 @@ async function scrapeDistrictMandalData(page, district, mandal) {
       '--disable-dev-shm-usage',
       '--disable-accelerated-2d-canvas',
       '--disable-gpu',
-      '--window-size=1920,1080'
+      '--window-size=1920,1080',
+      '--disable-web-security',
+      '--disable-features=IsolateOrigins,site-per-process',
+      '--ignore-certificate-errors'
     ]
   });
   
@@ -230,25 +184,98 @@ async function scrapeDistrictMandalData(page, district, mandal) {
     await page.setViewport({ width: 1920, height: 1080 });
     await page.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     
-    console.log('🌐 Navigating to reports page...');
+    // Enable console logging from page
+    page.on('console', msg => console.log('PAGE LOG:', msg.text()));
+    
+    console.log('Navigating to reports page...');
     await page.goto('https://unifiedfamilysurvey.ap.gov.in/#/home/publicreports', {
       waitUntil: 'networkidle2',
       timeout: 60000
     });
     
-    console.log('⏳ Waiting for page to load...');
-    await sleep(15000);
+    await page.screenshot({ path: '01-initial-load.png', fullPage: true });
+    console.log('Initial screenshot taken');
     
-    // Scrape data
-    const counts = await scrapeDistrictMandalData(page, 'ANANTHAPURAMU', 'ANANTAPUR-U');
+    // Wait for table to load
+    await page.waitForSelector('tbody tr', { timeout: 30000 }).catch(() => {
+      console.log('Table not found, waiting longer...');
+      return sleep(10000);
+    });
     
-    console.log('✅ Scraping completed!');
-    console.log(`📈 Today: ${counts.today} records, Yesterday: ${counts.yesterday} records`);
+    await sleep(5000);
     
-  } catch (error) {
-    console.error('❌ Fatal error:', error);
-    process.exit(1);
+    // Click district
+    console.log('Clicking district: ANANTHAPURAMU');
+    await page.evaluate(() => {
+      const cells = [...document.querySelectorAll('tbody tr td:nth-child(2)')];
+      for (let cell of cells) {
+        if (cell.innerText.includes('ANANTHAPURAMU')) {
+          cell.click();
+          return true;
+        }
+      }
+      return false;
+    });
+    
+    await sleep(7000);
+    await page.screenshot({ path: '02-after-district.png', fullPage: true });
+    
+    // Click mandal
+    console.log('Clicking mandal: ANANTAPUR-U');
+    await page.evaluate(() => {
+      const elements = [...document.querySelectorAll('h4, .report-box, td, a')];
+      for (let el of elements) {
+        if (el.innerText && el.innerText.includes('ANANTAPUR-U')) {
+          el.click();
+          return true;
+        }
+      }
+      return false;
+    });
+    
+    await sleep(8000);
+    await page.screenshot({ path: '03-after-mandal.png', fullPage: true });
+    
+    // Wait for table
+    await page.waitForFunction(() => {
+      const rows = document.querySelectorAll('tbody tr');
+      return rows.length > 10;
+    }, { timeout: 30000 });
+    
+    // Get dates
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    
+    // Today's data
+    console.log('Fetching today\'s data...');
+    await setDatesAndSubmit(page, formatDateForInput(today), formatDateForInput(today));
+    await sleep(5000);
+    await page.screenshot({ path: '04-today-data.png', fullPage: true });
+    
+    const todayData = await scrapeTableData(page);
+    console.log(`Today: ${todayData.length} records`);
+    await sendToSheet('RawData', todayData, formatDateForDisplay(today));
+    
+    // Yesterday's data
+    console.log('Fetching yesterday\'s data...');
+    await setDatesAndSubmit(page, formatDateForInput(yesterday), formatDateForInput(yesterday));
+    await sleep(5000);
+    await page.screenshot({ path: '05-yesterday-data.png', fullPage: true });
+    
+    const yesterdayData = await scrapeTableData(page);
+    console.log(`Yesterday: ${yesterdayData.length} records`);
+    await sendToSheet('Yesterday Data', yesterdayData, formatDateForDisplay(yesterday));
+    
+    console.log('Scraping completed successfully!');
+    
   } finally {
     await browser.close();
   }
-})();
+}
+
+// Run the scraper
+scrapeData().catch(error => {
+  console.error('Fatal error:', error);
+  process.exit(1);
+});
