@@ -4,6 +4,6 @@
   "dependencies": {
     "puppeteer-core": "^21.0.0",
     "@puppeteer/browsers": "^2.0.0",
-    "node-fetch": "^3.3.0"
+    "node-fetch": "^2.6.7"
   }
 }
